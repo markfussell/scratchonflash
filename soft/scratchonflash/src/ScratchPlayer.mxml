@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Application xmlns:mx="http://www.adobe.com/2006/mxml" layout="vertical"
+    creationComplete="handleCreationComplete()"
+    applicationComplete="handleApplicationComplete()"
+    implements="com.chimu.scratchplayer.app.StageContainer,com.chimu.scratchplayer.app.ScratchApp"
+    
+xmlns:local="*">
+<mx:Script>
+    <![CDATA[
+        import mx.controls.Alert;
+        import mx.binding.utils.BindingUtils;
+        import mx.containers.VDividedBox;
+        
+        import com.chimu.scratchplayer.objectio.ObjStream;
+        import com.chimu.scratchplayer.objects.ScratchObjectPack;
+        import com.chimu.scratchplayer.objects.StageMorph;
+        
+        /**
+         * This is the main ScratchPlayer, currently in a debugging-oriented format
+         * and also currently a bit overloaded in the amount of code in the MXML
+         * file.
+         * 
+         * The ScratchPlayer is responsible for loading projects, maintaining the
+         * outer graphics context, sending events into the Stage, and sending
+         * 'step' requests into the Scheduler.
+         * 
+         * The debugging version has status information in various formats
+         * and a fair amount of step-control.
+         * 
+         */
+
+        public var scratchStage : StageMorph;
+        protected var my_timer : Timer;
+        
+        
+        protected var my_autoOpenFlag : Boolean = false;
+        protected var my_autoStartFlag : Boolean = false;
+        
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        protected function handleApplicationComplete() : void {
+            stage.addEventListener(KeyboardEvent.KEY_DOWN, handleKeyDown);
+            stage.addEventListener(KeyboardEvent.KEY_UP, handleKeyUp);
+        }
+        
+        protected function handleCreationComplete() : void {
+
+            this.setFocus();
+
+            vFileUrl.text = "http://scratch.mit.edu/projects/parseroo/260752"
+            
+
+            //Two static package initilizations
+            ObjStream.initializeFor(this);
+            ScratchObjectPack.initializeFor(this);
+         
+            vRenderArea.graphics.beginFill(0xFFFF00);
+            vRenderArea.graphics.drawCircle(10,10,10);
+        
+            startTimer();
+
+            var urlVars : URLVariables = getPageUrlVars();
+            var purl : String = urlVars.purl;
+            if (isNotEmpty(purl)) {
+                vFileUrl.text = purl;
+            }
+            var autoOpen : String = urlVars.open;
+            if (isNotEmpty(autoOpen)) {
+                my_autoOpenFlag = (autoOpen == "true");
+            }
+            var autoStart : String = urlVars.start;
+            if (isNotEmpty(autoStart)) {
+                my_autoStartFlag = (autoStart == "true");
+            }
+            //BindingUtils.bindSetter(handlePurlChanged, vUrl, "purl");
+            //vUrl.purl = "file:///c:/users/MarkFussell/Tower_of_Hanoi.sb";
+            
+            
+            if (my_autoOpenFlag) {
+                openFile();
+            }
+        }
+        
+        protected function isNotEmpty(string : String) : Boolean {
+            return (string != null) && (string.length > 0);
+        }
+
+        protected function handlePurlChanged(value:String):void {
+            //Alert.show("Purl changed: "+vUrl.purl);    
+        }
+        
+        static public function getPageUrlVars() : URLVariables {
+            if (!ExternalInterface.available) {
+                return null;
+            }
+            
+            var queryString : String = ExternalInterface.call("window.location.search.substring",1);
+            var urlVars:URLVariables = new URLVariables();
+            if (queryString != null && queryString != "") {
+                urlVars.decode(queryString);
+            }
+            return urlVars;    
+        }
+        
+        
+        public function getStageCanvas() : Canvas {
+            return vRenderArea;
+        }
+        
+
+        public function logInfo(info : String) : void {
+            vLogArea.text = vLogArea.text + info + "\n";
+            trace(info);
+        }
+         
+
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        protected function handleStepClicked() : void {
+            if (scratchStage == null) {
+                Alert.show("Have not loaded a project");
+                return;
+            }
+            stepProcesses();
+        }
+        
+
+        protected function handleStep10Clicked() : void {
+            if (scratchStage == null) {
+                Alert.show("Have not loaded a project");
+                return;
+            }
+            for (var i:int = 0; i<10; i++) {
+                stepProcesses();
+            }
+        }
+        
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        protected function startTimer() : void {
+            my_timer = new Timer(33);
+            my_timer.addEventListener(TimerEvent.TIMER, handleTimerEvent);
+            my_timer.start();
+        }
+        
+        //Can't take up more than 20 milliseconds of time if we do multiple steps per frame
+        static protected const CONST_maxRepeatTimeMillis : int = 20;
+        protected function handleTimerEvent(event : TimerEvent) : void {
+            if (scratchStage == null) return;
+            if (!vStepEachFrame.selected) return;
+         
+            var startTime : int = new Date().time;
+            var limitTime : int = startTime + CONST_maxRepeatTimeMillis; 
+            for (var i:int = 0; i<vSlider.value; i++) {
+                stepProcesses();
+                var currentTime : int =  new Date().time;
+                if ( (amStopped) || (currentTime > limitTime) ) {
+                    break;
+                }
+            }        
+        }
+        
+        protected function stopTimer() : void {
+            if (my_timer != null) {
+                my_timer.stop();
+                my_timer = null;
+            }
+        }
+        
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        protected var amStopped : Boolean = true; 
+
+        protected function stepProcesses() : void {
+            if (!amStopped) {
+                scratchStage.scheduler.stepProcesses();
+            }    
+        }
+        
+
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        static protected const CONST_mitPrefix : String = "http://scratch.mit.edu/projects/";
+        static protected const CONST_mitPrefix2 : String = "http://scratch.mit.edu/static/projects/";
+        
+        public function openFile() : void {
+            setFocus();
+            
+            var loader : URLLoader = new URLLoader();
+            var fileUrl : String = vFileUrl.text;
+            
+            //Fix a direct scratch project reference:
+            var index : int = fileUrl.search(CONST_mitPrefix);
+            if (index >= 0) {
+                fileUrl = CONST_mitPrefix2+fileUrl.substring(index + CONST_mitPrefix.length);
+            }
+            index = fileUrl.search(".sb$");
+            if (index <= 0) {
+                fileUrl = fileUrl+".sb";
+            }
+            
+            var url : URLRequest = new URLRequest(fileUrl);
+            loader.dataFormat=URLLoaderDataFormat.BINARY;
+            loader.addEventListener(Event.COMPLETE,handleLoaderComplete);
+            loader.load(url);
+        }
+            
+        protected function handleLoaderComplete(event : Event) : void {
+            stopTimer();
+            
+            var loader:URLLoader = event.target as URLLoader;
+            var data : ByteArray = loader.data as ByteArray;
+    
+            //Alert.show("File length: "+loader.bytesTotal+" ; "+loader.dataFormat+" ; "+data.length);
+            
+            vLogArea.text = "\n";
+            
+            var objectStream : ObjStream = new ObjStream();
+            var stage : StageMorph;
+            try {
+                stage = objectStream.readStageFrom_showProgress(data, false);
+            } catch (e : Error) {
+                logInfo("Sorry... could not load file: "+vFileUrl);
+                logInfo(e.getStackTrace());
+            }
+    
+            //trace("Received the stage: "+stage);
+            scratchStage = stage;
+            scratchStage.initFlashContainer(this);
+    
+            startTimer();
+            amStopped = false;
+            
+    
+            dumpStageInformation();
+            
+            if (my_autoOpenFlag) {
+                my_autoOpenFlag = false;
+                if (my_autoStartFlag) {
+                    my_autoStartFlag = false;
+                    handleGoClicked();
+                }
+            }
+        }
+        
+        
+        protected function dumpStageInformation() : void {
+            var buffer : Array = new Array();
+            scratchStage.printCodeOn_depth(buffer, 0);
+            
+            var newString : String = "";
+            for each (var line : String in buffer) {
+                newString = newString.concat(line);
+            }
+            vScratchStatus.text = newString;
+        }
+ 
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        protected function handleOpenClicked() : void {
+            openFile();
+        }
+        
+        protected function handleGoClicked() : void {
+            vConsole.text = vConsole.text+"Go!\n";
+            vLogArea.text = "\n";
+            
+            amStopped = false;
+            
+            if (scratchStage != null) {
+                scratchStage.handleStartClicked();
+            }
+        }
+        
+        protected function handleStopClicked() : void {
+            amStopped = true;
+            vConsole.text = vConsole.text+"Stop!\n";
+        }
+        
+        protected function handleKeyDown(event : KeyboardEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleKeyDown(event);
+            }
+        }
+        
+        protected function handleKeyUp(event : KeyboardEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleKeyUp(event);
+            }
+        }
+        
+        
+        //protected function
+        protected function handleMouseMove(event : MouseEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleMouseEvent(event);
+            }
+        }
+        
+        protected function handleMouseDown(event : MouseEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleMouseDownEvent(event);
+            }
+        }
+        
+        protected function handleMouseUp(event : MouseEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleMouseUpEvent(event);
+            }
+        }
+        
+        protected function handleMouseOut(event : MouseEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleMouseEvent(event);
+            }
+        }
+        
+        protected function handleMouseOver(event : MouseEvent) : void {
+            if (scratchStage != null) {
+                scratchStage.handleMouseEvent(event);
+            }
+        }
+        
+        //======================================================
+        //======================================================
+        //======================================================
+        
+        
+    ]]>
+</mx:Script>
+<!-- <local:ScratchPlayer_UrlModel id="vUrl" /> -->
+<mx:VBox>
+<mx:HBox verticalAlign="bottom" width="100%">
+    <mx:Spacer width="100%" />
+    <mx:Button label="Go!" click="handleGoClicked()" focusEnabled="false" />
+    <mx:Button label="Stop!" click="handleStopClicked()" focusEnabled="false" />
+</mx:HBox>    
+<mx:Canvas id="vRenderArea" width="480" height="360" borderStyle="solid" verticalScrollPolicy="off" horizontalScrollPolicy="off"
+    mouseMove="handleMouseMove(event)" 
+    mouseDown="handleMouseDown(event)" 
+    mouseUp="handleMouseUp(event)"
+    mouseOut="handleMouseOut(event)"
+    mouseOver="handleMouseOver(event)"
+/>
+<mx:HBox>
+    <mx:Label text="Project URL:" fontWeight="bold"/>
+    <mx:TextInput id="vFileUrl" width="300" />
+    <mx:Button label="Open" click="handleOpenClicked()" toolTip="Open the new project URL" focusEnabled="false" />
+</mx:HBox>
+<mx:HBox verticalAlign="bottom" width="100%">
+    <mx:Button label="Step 1" buttonDown="handleStepClicked()" autoRepeat="true" repeatInterval="150"/>
+    <mx:Button label="10" buttonDown="handleStep10Clicked()"  autoRepeat="true" repeatInterval="150"/>
+    <mx:CheckBox id="vStepEachFrame" label="Step each frame?" selected="true" toolTip="Step the program each frame (1/30th of a second)?" />
+    <mx:HSlider id="vSlider" minimum="1" maximum="100" value="1" labels="['1','Steps per Frame','100']" snapInterval="1" tickInterval="10" tickColor="black"/>
+</mx:HBox>
+</mx:VBox>
+<mx:HBox width="100%" height="100%">
+<mx:TextArea id="vScratchStatus" width="100%" height="100%" focusEnabled="false" editable="false"/>
+<mx:TextArea id="vLogArea" width="100%" height="100%" focusEnabled="false" editable="false" text="Log Area:"/>
+</mx:HBox>
+<mx:TextArea id="vConsole" width="100%" height="100%" focusEnabled="false" editable="false"/>
+</mx:Application>
