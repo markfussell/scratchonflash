@@ -1,5 +1,0 @@
-/* This CSS stylesheet defines styles used by required elements in a URLKit application page */
-
-#historyFrame { width: 0px; height: 0px; display:none }
-#anchorDiv { width: 0px; height: 0px; display:none }
-#formDiv { width: 0px; height: 0px; display:none }
